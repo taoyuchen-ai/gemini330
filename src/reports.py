@@ -19,6 +19,7 @@ def daily_report(participant_id: str,
                  labels: Sequence[PostureLabel],
                  phase: str = "",
                  reminders: int = 0,
+                 correction_times: Sequence[float] | None = None,
                  session_start: float | None = None,
                  session_end: float | None = None) -> dict:
     """生成个人日报。"""
@@ -37,6 +38,7 @@ def daily_report(participant_id: str,
         "bad_ratio": compute_ratio(labels),
         "posture_counts": dict(counts),
         "reminders": reminders,
+        "correction_times": list(correction_times) if correction_times else [],
     }
 
 
