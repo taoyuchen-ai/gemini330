@@ -1,0 +1,27 @@
+# Gemini335 姿态监测系统依赖锁定
+#
+# Python 3.12（windows x64）真机实测可用组合。
+# 注意：mediapipe 1.x 移除了 mp.solutions API，必须使用 0.10.x；
+# 而 0.10.x 与 protobuf >=4 不兼容（FieldDescriptor.label 已移除），
+# 因此 protobuf 必须 <4。numpy 锁 1.26 以兼容 mediapipe 0.10.x；
+# pyorbbecsdk2 wheel 元数据要 numpy>=2.1，但实测 numpy 1.26 可运行。
+
+# 相机
+pyorbbecsdk2==2.1.2          # 不在 PyPI，从 GitHub release wheel 安装：
+                             #   https://github.com/orbbec/pyorbbecsdk2/releases
+                             #   文件名：pyorbbecsdk2-2.1.2-cp312-cp312-win_amd64.whl
+
+# 视觉推理（锁版本避免 1.x solutions API 移除）
+mediapipe==0.10.14           # 真机实测可用的最后一个含 mp.solutions API 的 cp312 wheel
+protobuf<4                   # 兼容 mediapipe 0.10.x（FieldDescriptor.label 在 protobuf 4+ 移除）
+numpy==1.26.4                # 同时兼容 mediapipe 0.10.x 与 pyorbbecsdk2 实测
+
+# OpenCV（相机帧处理）
+opencv-contrib-python==4.10.0.84
+
+# 数据处理
+scipy==1.17.1                # Friedman/Wilcoxon/Spearman 统计
+PyYAML==6.0.2                # 阈值配置
+
+# 测试
+pytest==8.3.4
