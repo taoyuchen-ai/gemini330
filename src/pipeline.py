@@ -13,10 +13,12 @@ import yaml
 from src.depth_distance import head_desk_distance, sample_depth
 from src.dotii_reminder import show_fail, show_idle
 from src.exceptions import DotiiAPIError, MediaPipeTimeoutError
+from src.phases import Phase
 from src.posture_classify import NOSE, BAD_POSTURES, PostureLabel, classify
 from src.reminder_policy import is_bad, should_remind
-from src.reports import daily_report
+from src.reports import daily_report, phase_columns
 from src.storage import Storage
+from src.stats_analysis import analyze_three_phase
 
 
 def load_thresholds(path: str = "config/thresholds.yaml") -> dict:
@@ -39,7 +41,7 @@ def run_session(camera,
                 storage: Storage,
                 thresholds: dict,
                 participant_id: str,
-                phase: str,
+                phase: Phase,
                 desk_depth_m: Optional[float] = None,
                 dotii_show: Optional[Callable[[str], None]] = None,
                 clock: Optional[Callable[[], float]] = None,
@@ -129,3 +131,36 @@ def run_session(camera,
     storage.flush()
     return daily_report(participant_id, labels, phase=phase, reminders=reminders,
                         session_start=t0, session_end=clock())
+
+
+def run_study(sessions_config: list[dict],
+              session_runner: Callable[[dict], dict]) -> dict:
+    """研究主分析编排（ADR-0008 端到端）。
+
+    串联多被试 × 3 阶段（baseline/intervention/followup）会话，
+    聚合为 Friedman 列对齐格式后调用 analyze_three_phase。
+
+    Args:
+        sessions_config: 每项至少含 participant_id 与 phase；
+                         其他字段由 session_runner 解释（如 kps_seq、max_frames）。
+        session_runner: callable(sess_config) -> daily_report dict。
+                         调用方负责构造 camera/pose/storage/thresholds 等依赖。
+
+    Returns:
+        {
+            "daily_reports": [daily_report, ...],
+            "analysis": analyze_three_phase 输出 dict 或 None（无数据）,
+            "n_subjects": int,
+        }
+    """
+    daily_reports = [session_runner(s) for s in sessions_config]
+    if not daily_reports:
+        return {"daily_reports": [], "analysis": None, "n_subjects": 0}
+
+    pids, phases = phase_columns(daily_reports)
+    if not pids:
+        # 有日报但被试未在 3 阶段全出现 → 无可分析列
+        return {"daily_reports": daily_reports, "analysis": None, "n_subjects": 0}
+
+    analysis = analyze_three_phase(phases)
+    return {"daily_reports": daily_reports, "analysis": analysis, "n_subjects": len(pids)}
