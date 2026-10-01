@@ -1,0 +1,72 @@
+# Posture classification thresholds (per ADR-0005)
+# 姿态分类阈值，按 ADR-0005 现场标定 + 文献参考值
+# 阈值需对每位被试在校准期（~1 周）现场实测标定
+# 文献参考值在每项后以 (ref:) 注释
+
+# 默认值用于占位，部署前需替换为现场标定结果
+
+# RGB 角度阈值（单位：度）
+rgb:
+  # 躯干-大腿角，< threshold 视为弯腰
+  # 文献参考：≤ 100° 提示躯干前倾 (ref: 脊柱外科学教材)
+  trunk_thigh_angle_bend_threshold: 100
+
+  # 躯干后仰角，> threshold 视为后仰（休息/中性，不计入不良）
+  trunk_lean_back_threshold: 20
+
+  # 头部偏航角，> threshold 视为转头（中性）
+  head_yaw_turn_threshold: 25
+
+  # 躯干侧偏角，> threshold 视为侧身（中性）
+  trunk_lateral_lean_threshold: 15
+
+# 深度阈值（单位：米，依赖 Orbbec SDK aligned depth 流）
+depth:
+  # 头部关键点到桌面参考点距离
+  # 前倾读写可接受区间
+  forward_read_min: 0.20   # 头-桌面距离 > 0.20 m 视为前倾读写（可接受）
+  forward_read_max: 0.45   # 头-桌面距离 < 0.45 m 视为前倾读写（可接受）
+  # 趴桌：头-桌面距离 < threshold
+  desk_lying_threshold: 0.20  # 头-桌面距离 < 0.20 m 视为趴桌（不良）
+  # 文献参考：读写距离 < 30 cm 为不良读写姿势 (ref: GB/T 26156 学生课桌椅功能尺寸)
+
+# 单帧抖动平滑
+smoothing:
+  window_seconds: 1.0   # 1 秒窗移动众数
+  fps: 30               # 与相机采集帧率一致
+
+# 提醒触发逻辑（独立于统计口径）
+reminder:
+  sustained_seconds: 30       # 不良姿势连续持续 ≥ 30 秒触发提醒
+  min_interval_seconds: 60    # 最短提醒间隔 60 秒
+  track_phase_disabled: true  # 跟踪阶段关掉提醒验证内化效应
+
+# 离座判定
+absence:
+  no_skeleton_seconds: 30  # 连续 30 秒无骨架标记为离座
+
+# 数据完整性
+integrity:
+  flush_interval_seconds: 60    # SQLite 每分钟落盘
+  max_missing_ratio: 0.20       # 缺失比例 > 20% 的会话整体剔除
+  camera_reconnect_attempts: 3  # 相机掉线重连次数
+  camera_reconnect_delay: 5     # 每次重连间隔（秒）
+  dotii_api_timeout: 1          # Dotii HTTP 超时（秒）
+  dotii_api_retry: 1            # Dotii HTTP 重试次数
+  dotii_failure_alert_threshold: 5  # Dotii 连续失败报警阈值
+
+# 被试与阶段
+experiment:
+  participants_per_class: 3
+  classes: 2
+  total_participants: 6
+  phases:
+    baseline_weeks: 2
+    intervention_weeks: 4
+    followup_weeks: 2
+  vision_strata: ["normal", "mild_myopia", "moderate_myopia"]
+
+# 数据保留
+retention:
+  raw_coords_delete_days: 30        # 原始坐标分析完成 30 日内删除
+  aggregate_retention_semesters: 1  # 日报聚合保留 1 学期

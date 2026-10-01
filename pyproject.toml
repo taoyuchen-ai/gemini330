@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gemini330"
+version = "0.1.0"
+description = "AI 体态监测与矫正系统（中学生课堂坐姿/读写姿势对视力与脊柱影响）"
+requires-python = ">=3.10"
+dependencies = [
+    "mediapipe>=0.10",       # BlazePose 33 关键点（GPU 推理 30 fps）
+    "opencv-python>=4.8",   # 图像处理，MediaPipe 依赖
+    "pyorbbecsdk>=0.5",     # Orbbec Gemini335 aligned depth+color
+    "requests>=2.31",       # Dotii-Display HTTP API
+    "pyyaml>=6.0",          # 读 thresholds.yaml
+    "numpy>=1.24",          # 关键点向量运算
+    "scipy>=1.11",          # Friedman / Wilcoxon 统计
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-mock>=3.11"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
