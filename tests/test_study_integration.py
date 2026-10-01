@@ -189,3 +189,105 @@ def test_run_study_returns_empty_when_no_sessions(tmp_path):
     assert result["daily_reports"] == []
     assert result["n_subjects"] == 0
     assert result["analysis"] is None  # 无数据时不调用 stats
+
+
+def _fake_report(pid, phase, bad_ratio, correction_times=None):
+    """构造完整 daily_report dict 用于 run_study 探索性分析测试。"""
+    return {
+        "participant_id": pid,
+        "phase": phase,
+        "session_start": 0.0,
+        "session_end": 60.0,
+        "total_frames": 100,
+        "valid_frames": 100,
+        "bad_frames": int(bad_ratio * 100),
+        "bad_ratio": bad_ratio,
+        "posture_counts": {},
+        "reminders": 0,
+        "correction_times": list(correction_times) if correction_times else [],
+    }
+
+
+def test_run_study_with_screening_returns_exploratory_spearman(tmp_path):
+    """B3：screening CSV + 3 被试 → spearman_vision/questionnaire 非 None；
+    correction_stats 聚合所有 correction_times。"""
+    from src.pipeline import run_study
+
+    pids = ["p01", "p02", "p03"]
+    # baseline bad_ratio 与 vision 完全反相关 → rho=-1.0
+    baseline_ratios = [0.50, 0.30, 0.40]
+    vision = [0.4, 0.7, 0.5]
+    quest = [0.5, 0.8, 0.6]
+
+    reports = []
+    for i, pid in enumerate(pids):
+        reports.append(_fake_report(pid, "baseline", baseline_ratios[i]))
+        reports.append(_fake_report(pid, "intervention", 0.20))
+        reports.append(_fake_report(pid, "followup", 0.25,
+                                    correction_times=[5.0, 6.0]))
+
+    csv_path = tmp_path / "screening.csv"
+    csv_path.write_text(
+        "participant_id,vision_score,questionnaire_score\n" +
+        "\n".join(f"{p},{v},{q}" for p, v, q in zip(pids, vision, quest)) + "\n",
+        encoding="utf-8")
+
+    result = run_study(
+        sessions_config=reports,
+        session_runner=lambda s: s,
+        screening_path=str(csv_path),
+    )
+
+    assert "exploratory" in result
+    expl = result["exploratory"]
+    assert expl["spearman_vision"] is not None
+    rho_v, _ = expl["spearman_vision"]
+    assert rho_v == pytest.approx(-1.0)  # 完全反相关
+    assert expl["spearman_questionnaire"] is not None
+    # 3 被试 × 2 correction_times（仅 followup 阶段有）= 6 个值
+    assert expl["correction_stats"]["n"] == 6
+    assert expl["correction_stats"]["mean"] == pytest.approx(5.5)
+
+
+def test_run_study_without_screening_returns_none_spearman(tmp_path):
+    """B3：未提供 screening_path → spearman 为 None；correction_stats 仍聚合。"""
+    from src.pipeline import run_study
+
+    pids = ["p01", "p02", "p03"]
+    reports = []
+    for i, pid in enumerate(pids):
+        reports.append(_fake_report(pid, "baseline", 0.50 - i * 0.10))
+        reports.append(_fake_report(pid, "intervention", 0.20))
+        reports.append(_fake_report(pid, "followup", 0.25,
+                                    correction_times=[3.0]))
+
+    result = run_study(
+        sessions_config=reports,
+        session_runner=lambda s: s,
+        # 不传 screening_path
+    )
+
+    expl = result["exploratory"]
+    assert expl["spearman_vision"] is None
+    assert expl["spearman_questionnaire"] is None
+    assert expl["correction_stats"]["n"] == 3  # 3 被试 × 1 correction_time
+
+
+def test_run_study_no_correction_times_returns_none_correction_stats(tmp_path):
+    """B3：无 correction_times → correction_stats 为 None。"""
+    from src.pipeline import run_study
+
+    pids = ["p01", "p02", "p03"]
+    reports = []
+    for i, pid in enumerate(pids):
+        reports.append(_fake_report(pid, "baseline", 0.50 - i * 0.10))
+        reports.append(_fake_report(pid, "intervention", 0.20))
+        reports.append(_fake_report(pid, "followup", 0.25))  # 无 correction_times
+
+    result = run_study(
+        sessions_config=reports,
+        session_runner=lambda s: s,
+    )
+
+    expl = result["exploratory"]
+    assert expl["correction_stats"] is None
