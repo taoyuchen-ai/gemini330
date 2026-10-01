@@ -26,6 +26,7 @@ from src.stats_analysis import (
     spearman_corr,
     wilcoxon_signed_rank,
 )
+from src.phases import ThreePhase
 
 
 # ---------- Friedman ----------
@@ -192,10 +193,12 @@ def test_descriptive_stats_empty_raises():
 # ---------- analyze_three_phase（主分析入口） ----------
 
 def test_analyze_three_phase_returns_full_structure():
-    rng_baseline = [0.50, 0.45, 0.40, 0.55, 0.48, 0.52]
-    rng_intervention = [0.30, 0.25, 0.20, 0.35, 0.28, 0.32]
-    rng_followup = [0.35, 0.30, 0.25, 0.40, 0.33, 0.37]
-    out = analyze_three_phase(rng_baseline, rng_intervention, rng_followup)
+    phases = ThreePhase(
+        baseline=[0.50, 0.45, 0.40, 0.55, 0.48, 0.52],
+        intervention=[0.30, 0.25, 0.20, 0.35, 0.28, 0.32],
+        followup=[0.35, 0.30, 0.25, 0.40, 0.33, 0.37],
+    )
+    out = analyze_three_phase(phases)
     assert set(out.keys()) == {
         "friedman", "post_hoc", "bonferroni", "eta_squared",
         "kendalls_w", "n_subjects", "k_phases",

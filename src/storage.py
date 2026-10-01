@@ -9,6 +9,7 @@ import sqlite3
 import time
 from typing import Optional
 
+from src.phases import Phase
 from src.posture_classify import PostureLabel
 
 
@@ -44,7 +45,7 @@ class Storage:
         )
         self.conn.commit()
 
-    def create_session(self, participant_id: str, phase: str,
+    def create_session(self, participant_id: str, phase: Phase,
                        start_time: Optional[float] = None) -> int:
         t = start_time if start_time is not None else time.time()
         cur = self.conn.execute(

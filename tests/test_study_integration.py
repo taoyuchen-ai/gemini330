@@ -10,6 +10,7 @@ import pytest
 from src.posture_classify import PostureLabel as P
 from src.reports import daily_report, phase_columns
 from src.stats_analysis import analyze_three_phase
+from src.phases import ThreePhase
 
 
 # ---------- phase_columns ----------
@@ -26,9 +27,9 @@ def _rep(pid, phase, bad_ratio, valid=100):
 
 
 def test_phase_columns_empty():
-    pids, groups = phase_columns([])
+    pids, phases = phase_columns([])
     assert pids == []
-    assert groups == [[], [], []]
+    assert phases == ThreePhase([], [], [])
 
 
 def test_phase_columns_single_participant_three_phases():
@@ -37,12 +38,11 @@ def test_phase_columns_single_participant_three_phases():
         _rep("p01", "intervention", 0.30),
         _rep("p01", "followup", 0.35),
     ]
-    pids, groups = phase_columns(reports)
+    pids, phases = phase_columns(reports)
     assert pids == ["p01"]
-    assert len(groups) == 3
-    assert groups[0] == [pytest.approx(0.50)]
-    assert groups[1] == [pytest.approx(0.30)]
-    assert groups[2] == [pytest.approx(0.35)]
+    assert phases.baseline == [pytest.approx(0.50)]
+    assert phases.intervention == [pytest.approx(0.30)]
+    assert phases.followup == [pytest.approx(0.35)]
 
 
 def test_phase_columns_aggregates_multiple_days_per_phase():
@@ -55,11 +55,11 @@ def test_phase_columns_aggregates_multiple_days_per_phase():
         _rep("p01", "followup", 0.30),
         _rep("p01", "followup", 0.40),  # 均值 0.35
     ]
-    pids, groups = phase_columns(reports)
+    pids, phases = phase_columns(reports)
     assert pids == ["p01"]
-    assert groups[0] == [pytest.approx(0.50)]
-    assert groups[1] == [pytest.approx(0.30)]
-    assert groups[2] == [pytest.approx(0.35)]
+    assert phases.baseline == [pytest.approx(0.50)]
+    assert phases.intervention == [pytest.approx(0.30)]
+    assert phases.followup == [pytest.approx(0.35)]
 
 
 def test_phase_columns_multiple_participants_aligned():
@@ -71,18 +71,18 @@ def test_phase_columns_multiple_participants_aligned():
         _rep("p01", "followup", 0.35),
         _rep("p02", "followup", 0.25),
     ]
-    pids, groups = phase_columns(reports)
+    pids, phases = phase_columns(reports)
     assert set(pids) == {"p01", "p02"}
-    assert len(groups[0]) == 2
-    assert len(groups[1]) == 2
-    assert len(groups[2]) == 2
+    assert len(phases.baseline) == 2
+    assert len(phases.intervention) == 2
+    assert len(phases.followup) == 2
     # 列对齐：同 index = 同被试
     p01_idx = pids.index("p01")
     p02_idx = pids.index("p02")
-    assert groups[0][p01_idx] == pytest.approx(0.50)
-    assert groups[0][p02_idx] == pytest.approx(0.40)
-    assert groups[1][p01_idx] == pytest.approx(0.30)
-    assert groups[2][p02_idx] == pytest.approx(0.25)
+    assert phases.baseline[p01_idx] == pytest.approx(0.50)
+    assert phases.baseline[p02_idx] == pytest.approx(0.40)
+    assert phases.intervention[p01_idx] == pytest.approx(0.30)
+    assert phases.followup[p02_idx] == pytest.approx(0.25)
 
 
 def test_phase_columns_drops_participant_missing_in_any_phase():
@@ -95,9 +95,9 @@ def test_phase_columns_drops_participant_missing_in_any_phase():
         _rep("p01", "followup", 0.35),
         # p02 followup 缺失
     ]
-    pids, groups = phase_columns(reports)
+    pids, phases = phase_columns(reports)
     assert pids == ["p01"]
-    assert all(len(g) == 1 for g in groups)
+    assert all(len(col) == 1 for col in phases)
 
 
 def test_phase_columns_phase_order_fixed_regardless_of_input():
@@ -107,10 +107,10 @@ def test_phase_columns_phase_order_fixed_regardless_of_input():
         _rep("p01", "intervention", 0.30),
         _rep("p01", "baseline", 0.50),
     ]
-    pids, groups = phase_columns(reports)
-    assert groups[0] == [pytest.approx(0.50)]  # baseline
-    assert groups[1] == [pytest.approx(0.30)]  # intervention
-    assert groups[2] == [pytest.approx(0.35)]  # followup
+    pids, phases = phase_columns(reports)
+    assert phases.baseline == [pytest.approx(0.50)]  # baseline
+    assert phases.intervention == [pytest.approx(0.30)]  # intervention
+    assert phases.followup == [pytest.approx(0.35)]  # followup
 
 
 def test_phase_columns_unknown_phase_raises():
@@ -123,86 +123,11 @@ def test_phase_columns_unknown_phase_raises():
 
 def test_run_study_end_to_end_two_participants_three_phases(tmp_path):
     """2 被试 × 3 阶段端到端：fake camera/pose → run_study → analyze_three_phase 结构。"""
-    from src.pipeline import run_study
+    from src.pipeline import run_session, run_study
     from src.storage import Storage
-
-    # 用 test_pipeline 的 fakes（最小复制避免跨文件耦合）
-    import numpy as np
-    from src.posture_classify import (
-        LEFT_EAR, LEFT_HIP, LEFT_KNEE, LEFT_SHOULDER,
-        NOSE, RIGHT_EAR, RIGHT_HIP, RIGHT_KNEE, RIGHT_SHOULDER,
+    from tests._fakes import (
+        THR, FakeCamera, FakeClock, FakePose, _bend_kps, _sit_upright_kps,
     )
-
-    THR = {
-        "rgb": {
-            "trunk_thigh_angle_bend_threshold": 100,
-            "trunk_lean_back_threshold": 20,
-            "head_yaw_turn_threshold": 25,
-            "trunk_lateral_lean_threshold": 15,
-        },
-        "depth": {
-            "forward_read_min": 0.20,
-            "forward_read_max": 0.45,
-            "desk_lying_threshold": 0.20,
-        },
-        "reminder": {
-            "sustained_seconds": 30,
-            "min_interval_seconds": 60,
-            "track_phase_disabled": True,
-        },
-        "absence": {"no_skeleton_seconds": 30},
-    }
-
-    def _sit_upright_kps():
-        kp = [None] * 33
-        kp[NOSE] = (0.5, 0.30, 0.10)
-        kp[LEFT_EAR] = (0.47, 0.32, 0.05)
-        kp[RIGHT_EAR] = (0.53, 0.32, 0.05)
-        kp[LEFT_SHOULDER] = (0.45, 0.40, 0.00)
-        kp[RIGHT_SHOULDER] = (0.55, 0.40, 0.00)
-        kp[LEFT_HIP] = (0.46, 0.60, 0.00)
-        kp[RIGHT_HIP] = (0.54, 0.60, 0.00)
-        kp[LEFT_KNEE] = (0.47, 0.78, 0.10)
-        kp[RIGHT_KNEE] = (0.53, 0.78, 0.10)
-        return kp
-
-    def _bend_kps():
-        kp = _sit_upright_kps()
-        kp[LEFT_SHOULDER] = (0.50, 0.50, 0.15)
-        kp[RIGHT_SHOULDER] = (0.50, 0.50, 0.15)
-        kp[LEFT_KNEE] = (0.47, 0.75, 0.10)
-        kp[RIGHT_KNEE] = (0.53, 0.75, 0.10)
-        return kp
-
-    class FakeCamera:
-        def __init__(self, n_frames):
-            self._color = np.zeros((4, 4, 3), dtype=np.uint8)
-            self._n = n_frames
-
-        def grab(self, timeout_ms=2000):
-            if self._n <= 0:
-                return None, None
-            self._n -= 1
-            return self._color, None
-
-    class FakePose:
-        def __init__(self, kps):
-            self._kps = list(kps)
-
-        def infer(self, color):
-            if not self._kps:
-                return [None] * 33
-            return self._kps.pop(0)
-
-    class FakeClock:
-        def __init__(self, step=1.0):
-            self.t = 0.0
-            self.step = step
-
-        def __call__(self):
-            v = self.t
-            self.t += self.step
-            return v
 
     # 研究设计：3 被试 × 3 阶段 × 5 帧/会话
     # baseline 全 bend（高 bad_ratio），intervention 全 sit_upright（0），followup 一半 bend
@@ -226,7 +151,6 @@ def test_run_study_end_to_end_two_participants_three_phases(tmp_path):
         pose = FakePose(sess["kps_seq"])
         # clock 重置避免跨 session 累积
         clk = FakeClock(1.0)
-        from src.pipeline import run_session
         return run_session(cam, pose, storage, THR,
                           participant_id=sess["participant_id"],
                           phase=sess["phase"],

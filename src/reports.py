@@ -8,16 +8,14 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Sequence
 
+from src.phases import PHASE_ORDER, Phase, ThreePhase
 from src.posture_classify import BAD_POSTURES, PostureLabel
 from src.statistics import compute_ratio
-
-# ADR-0008 三阶段固定顺序（baseline → intervention → followup）
-PHASE_ORDER: tuple[str, ...] = ("baseline", "intervention", "followup")
 
 
 def daily_report(participant_id: str,
                  labels: Sequence[PostureLabel],
-                 phase: str = "",
+                 phase: Phase | None = None,
                  reminders: int = 0,
                  session_start: float | None = None,
                  session_end: float | None = None) -> dict:
@@ -67,9 +65,9 @@ def phase_columns(reports: Sequence[dict]) -> tuple[list[str], list[list[float]]
         reports: daily_report dict 序列。
 
     Returns:
-        (participant_ids, [phase1_ratios, phase2_ratios, phase3_ratios])
-        每组按 participant_ids 顺序对齐（同 index = 同被试）。
-        无数据返回 ([], [[], [], []])。
+        (participant_ids, ThreePhase)
+        每阶段按 participant_ids 顺序对齐（同 index = 同被试）。
+        无数据返回 ([], ThreePhase([], [], []))。
 
     Raises:
         ValueError: 报告含 PHASE_ORDER 之外的阶段。
@@ -91,10 +89,12 @@ def phase_columns(reports: Sequence[dict]) -> tuple[list[str], list[list[float]]
         if participants_per_phase else set()
     pids = sorted(common)
 
-    # 每阶段每被试取均值
-    groups: list[list[float]] = []
+    # 每阶段每被试取均值 → ThreePhase
+    cols: list[list[float]] = []
     for phase in PHASE_ORDER:
         col = [sum(by_pair[(pid, phase)]) / len(by_pair[(pid, phase)])
                for pid in pids]
-        groups.append(col)
-    return pids, groups
+        cols.append(col)
+    return pids, ThreePhase(baseline=cols[0],
+                             intervention=cols[1],
+                             followup=cols[2])
