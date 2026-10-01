@@ -135,16 +135,15 @@ def test_kendalls_w_strictly_ordered_one():
 
 
 def test_eta_squared_friedman_known():
-    # 与 test_friedman_known_small_dataset 同数据，chi2 = 6.0
-    # η² = chi2 / (N-1) = 6.0 / (3-1) = 3.0 → 但 η² 应 capped at 1.0
-    # 实际 Tomczak 公式 η² = chi2/(N*(k-1))，即与 Kendall's W 相等
-    # 这里实现以 chi2/(N-1) 为 η²，公式差异由 ADR 选定
+    # 与 test_friedman_known_small_dataset 同数据，chi2 = 6.0, N=3, k=3
+    # Tomczak & Tomczak (2014) 对 Friedman 的 η² 公式：
+    #   η² = χ²_F / [N*(k-1)] = 6.0 / (3*2) = 1.0
+    # 该公式在数学上等于 Kendall's W（ADR-0008：Kendall's W 转 η²）
     baseline = [0.40, 0.50, 0.60]
     intervention = [0.20, 0.30, 0.40]
     followup = [0.30, 0.40, 0.50]
     eta = eta_squared_friedman([baseline, intervention, followup])
-    # 用 η² = χ² / (N-1)（Tomczak & Tomczak 2014），N=3
-    assert eta == pytest.approx(3.0, abs=1e-9)
+    assert eta == pytest.approx(1.0, abs=1e-9)
 
 
 # ---------- Spearman ----------

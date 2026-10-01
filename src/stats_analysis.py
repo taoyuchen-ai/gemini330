@@ -101,35 +101,54 @@ def bonferroni(p_values: Sequence[float],
 
 # ---------- Kendall's W 与 η² ----------
 
-def kendalls_w(groups: Sequence[Sequence[float]]) -> float:
-    """Kendall's W 一致性系数。
+def _kendalls_w_from_chi2(chi2: float, n: int, k: int) -> float:
+    """由已算的 Friedman χ² 计算 Kendall's W（避免重算 χ²）。
 
-    W = χ²_F / (N * (k - 1))
-    N = 被试数，k = 阶段数。
-
+    W = χ²_F / [N*(k-1)]，N = 被试数，k = 阶段数。
     完全一致 W=1.0；无一致 W=0.0。
     """
-    n = len(groups[0])
-    k = len(groups)
-    chi2, _ = friedman_test(groups)
     if n * (k - 1) == 0:
         return 0.0
     return chi2 / (n * (k - 1))
 
 
+def _eta_squared_from_chi2(chi2: float, n: int, k: int) -> float:
+    """由已算的 Friedman χ² 计算 η²（避免重算 χ²）。
+
+    Tomczak & Tomczak (2014) 对 Friedman 检验的公式：
+        η² = χ²_F / [N*(k-1)]
+    该公式在数学上等于 Kendall's W（ADR-0008：Kendall's W 转 η²）。范围 [0, 1]。
+    """
+    if n * (k - 1) == 0:
+        return 0.0
+    return chi2 / (n * (k - 1))
+
+
+def kendalls_w(groups: Sequence[Sequence[float]]) -> float:
+    """Kendall's W 一致性系数。
+
+    W = χ²_F / [N*(k-1)]，N = 被试数，k = 阶段数。
+    完全一致 W=1.0；无一致 W=0.0。
+    """
+    n = len(groups[0])
+    k = len(groups)
+    chi2, _ = friedman_test(groups)
+    return _kendalls_w_from_chi2(chi2, n, k)
+
+
 def eta_squared_friedman(groups: Sequence[Sequence[float]]) -> float:
     """Friedman η² 效应量。
 
-    采用 Tomczak & Tomczak (2014) 公式：
-        η² = χ²_F / (N - 1)
+    采用 Tomczak & Tomczak (2014) 对 Friedman 检验的公式：
+        η² = χ²_F / [N*(k-1)]
 
-    N = 被试数。该公式不 cap 在 1.0，小样本下可 >1（已知行为）。
+    N = 被试数，k = 阶段数。该公式在数学上等于 Kendall's W
+    （ADR-0008：报告效应量 η²，Kendall's W 转 η²）。范围 [0, 1]。
     """
     n = len(groups[0])
+    k = len(groups)
     chi2, _ = friedman_test(groups)
-    if n - 1 == 0:
-        return 0.0
-    return chi2 / (n - 1)
+    return _eta_squared_from_chi2(chi2, n, k)
 
 
 # ---------- Spearman 相关 ----------
@@ -244,8 +263,8 @@ def analyze_three_phase(baseline: Sequence[float],
         "friedman": (chi2, p_friedman),
         "post_hoc": post_hoc,
         "bonferroni": bonferroni_out,
-        "eta_squared": eta_squared_friedman(groups),
-        "kendalls_w": kendalls_w(groups),
+        "eta_squared": _eta_squared_from_chi2(chi2, n, len(groups)),
+        "kendalls_w": _kendalls_w_from_chi2(chi2, n, len(groups)),
         "n_subjects": n,
         "k_phases": 3,
     }
