@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from src.phases import Phase
 from src.posture_classify import BAD_POSTURES, PostureLabel
 
 
@@ -19,7 +20,7 @@ def is_bad(label: PostureLabel) -> bool:
 def should_remind(bad_since: Optional[float],
                   now: float,
                   last_reminder: Optional[float],
-                  phase: str,
+                  phase: Phase,
                   thresholds: dict) -> bool:
     """是否应触发提醒。
 

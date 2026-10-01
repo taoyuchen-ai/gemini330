@@ -13,6 +13,7 @@ import yaml
 from src.depth_distance import head_desk_distance, sample_depth
 from src.dotii_reminder import show_fail, show_idle
 from src.exceptions import DotiiAPIError, MediaPipeTimeoutError
+from src.phases import Phase
 from src.posture_classify import NOSE, BAD_POSTURES, PostureLabel, classify
 from src.reminder_policy import is_bad, should_remind
 from src.reports import daily_report, phase_columns
@@ -45,7 +46,7 @@ def run_session(camera,
                 storage: Storage,
                 thresholds: dict,
                 participant_id: str,
-                phase: str,
+                phase: Phase,
                 desk_depth_m: Optional[float] = None,
                 dotii_show: Optional[Callable[[str], None]] = None,
                 clock: Optional[Callable[[], float]] = None,
@@ -180,7 +181,7 @@ def run_study(sessions_config: list[dict],
         return {"daily_reports": [], "analysis": None, "n_subjects": 0,
                 "exploratory": _exploratory_analysis([], [], [], screening_path)}
 
-    pids, groups = phase_columns(daily_reports)
+    pids, phases = phase_columns(daily_reports)
     if not pids:
         # 有日报但被试未在 3 阶段全出现 → 无可分析列
         return {"daily_reports": daily_reports, "analysis": None, "n_subjects": 0,
@@ -233,3 +234,5 @@ def _exploratory_analysis(daily_reports: list[dict],
         "spearman_questionnaire": spearman_questionnaire,
         "correction_stats": correction_stats,
     }
+    analysis = analyze_three_phase(phases)
+    return {"daily_reports": daily_reports, "analysis": analysis, "n_subjects": len(pids)}
