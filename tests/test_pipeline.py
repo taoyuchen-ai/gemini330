@@ -109,3 +109,38 @@ def test_pipeline_no_reminder_in_followup(tmp_path):
                       dotii_show=dotii, clock=FakeClock(1.0), max_frames=n)
     assert rep["reminders"] == 0
     assert dotii.calls == []
+
+
+def test_pipeline_records_correction_time_after_reminder_recovery(tmp_path):
+    """B2：提醒触发后恢复 good → 记录从提醒到纠正的耗时。
+
+    前 35 帧 bend：t=30 触发提醒（last_reminder=30）。
+    第 36 帧 sit_upright（t=35）恢复 good → correction = 35 - 30 = 5。
+    """
+    n = 45
+    kps = [_bend_kps() for _ in range(35)] + [_sit_upright_kps() for _ in range(10)]
+    cam = FakeCamera(n)
+    pose = FakePose(kps)
+    dotii = FakeDotii()
+    rep = run_session(cam, pose, _storage(tmp_path), THR,
+                      participant_id="p01", phase="intervention",
+                      dotii_show=dotii, clock=FakeClock(1.0), max_frames=n)
+    assert rep["reminders"] == 1
+    assert dotii.calls.count("fail") == 1
+    assert len(rep["correction_times"]) == 1
+    assert rep["correction_times"][0] == pytest.approx(5.0)
+
+
+def test_pipeline_no_correction_time_when_bad_recovers_without_reminder(tmp_path):
+    """B2：bad 持续 <30s 恢复（未触发提醒）→ 不记录纠正耗时。"""
+    n = 10
+    # 前 5 帧 bend（<30s，不触发提醒），后 5 帧 sit_upright
+    kps = [_bend_kps() for _ in range(5)] + [_sit_upright_kps() for _ in range(5)]
+    cam = FakeCamera(n)
+    pose = FakePose(kps)
+    dotii = FakeDotii()
+    rep = run_session(cam, pose, _storage(tmp_path), THR,
+                      participant_id="p01", phase="intervention",
+                      dotii_show=dotii, clock=FakeClock(1.0), max_frames=n)
+    assert rep["reminders"] == 0
+    assert rep["correction_times"] == []
