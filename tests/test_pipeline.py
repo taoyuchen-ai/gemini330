@@ -144,3 +144,81 @@ def test_pipeline_no_correction_time_when_bad_recovers_without_reminder(tmp_path
                       dotii_show=dotii, clock=FakeClock(1.0), max_frames=n)
     assert rep["reminders"] == 0
     assert rep["correction_times"] == []
+
+
+def test_pipeline_applies_smoothing_to_labels(tmp_path):
+    """ADR-0005：单帧分类后用 1 秒窗移动众数平滑。
+
+    单帧 BEND 夹在 SIT_UPRIGHT 间应被平滑成 SIT_UPRIGHT，
+    daily_report.bad_ratio 反映平滑后结果（0 不良）。
+    用 FakeClock 步长 1/30 秒模拟真实 fps=30 → 1 秒窗覆盖 ±15 帧。
+    """
+    n = 11
+    kps = ([_sit_upright_kps() for _ in range(5)]
+           + [_bend_kps()]
+           + [_sit_upright_kps() for _ in range(5)])
+    cam = FakeCamera(n)
+    pose = FakePose(kps)
+    dotii = FakeDotii()
+    rep = run_session(cam, pose, _storage(tmp_path), THR,
+                      participant_id="p01", phase="intervention",
+                      dotii_show=dotii, clock=FakeClock(1/30), max_frames=n)
+    # 单帧 BEND 在 1 秒窗众数下被覆盖 → 0 不良
+    assert rep["bad_ratio"] == 0.0
+    assert rep["bad_frames"] == 0
+
+
+# ---------- Alerter 接入（ADR-0007 PI 报警机制）----------
+
+def test_pipeline_alerts_on_camera_reconnect_exhausted(tmp_path):
+    """ADR-0007：相机重连耗尽（CameraReconnectError）时调 alerter。
+
+    相机不可恢复 → log_exception + alert("camera_reconnect_exhausted")，
+    提前退出主循环并生成空日报（避免吞异常）。
+    """
+    from src.exceptions import CameraReconnectError
+    from tests.test_alerter import FakeAlerter
+
+    class DeadCamera:
+        def grab(self, timeout_ms=2000):
+            raise CameraReconnectError("相机重连 3 次仍失败")
+
+    alerter = FakeAlerter()
+    rep = run_session(DeadCamera(), FakePose([]), _storage(tmp_path), THR,
+                      participant_id="p01", phase="intervention",
+                      clock=FakeClock(1.0), max_frames=5, alerter=alerter)
+    # 相机重连耗尽 → alert 一次，kind 为 camera_reconnect_exhausted
+    kinds = [k for k, _ in alerter.alerts]
+    assert "camera_reconnect_exhausted" in kinds
+    # 相机死 → 主循环立即退出，日报无帧
+    assert rep["total_frames"] == 0
+
+
+def test_pipeline_alerts_on_dotii_failure_threshold(tmp_path):
+    """ADR-0007：Dotii 连续失败 ≥ dotii_failure_alert_threshold 时调 alerter。
+
+    35 帧 bend（clock step=1.0）：t=30 触发 should_remind，dotii 失败 →
+    last_reminder 仍为 None → 后续帧每帧都重试 dotii → 5 次连续失败时报警。
+    """
+    from src.exceptions import DotiiAPIError
+    from tests.test_alerter import FakeAlerter
+
+    def failing_dotii(expression):
+        raise DotiiAPIError("Dotii HTTP 失联")
+
+    thr = dict(THR)
+    thr["integrity"] = {"dotii_failure_alert_threshold": 5}
+
+    n = 35
+    cam = FakeCamera(n)
+    pose = FakePose([_bend_kps() for _ in range(n)])
+    alerter = FakeAlerter()
+    rep = run_session(cam, pose, _storage(tmp_path), thr,
+                      participant_id="p01", phase="intervention",
+                      dotii_show=failing_dotii, clock=FakeClock(1.0), max_frames=n,
+                      alerter=alerter)
+    # Dotii 连续失败 ≥ 5 → alert kind=dotii_failure_threshold
+    kinds = [k for k, _ in alerter.alerts]
+    assert "dotii_failure_threshold" in kinds
+    # 失败的 dotii 调用不增加 reminders
+    assert rep["reminders"] == 0

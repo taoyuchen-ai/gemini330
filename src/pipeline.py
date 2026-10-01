@@ -10,14 +10,16 @@ from typing import Callable, Optional
 
 import yaml
 
+from src.alerter import Alerter, NoopAlerter
 from src.depth_distance import head_desk_distance, sample_depth
 from src.dotii_reminder import show_fail, show_idle
-from src.exceptions import DotiiAPIError, MediaPipeTimeoutError
+from src.exceptions import CameraReconnectError, DotiiAPIError, MediaPipeTimeoutError
 from src.phases import Phase
 from src.posture_classify import NOSE, BAD_POSTURES, PostureLabel, classify
 from src.reminder_policy import is_bad, should_remind
 from src.reports import daily_report, phase_columns
 from src.screening import load_screening_csv
+from src.statistics import smooth
 from src.storage import Storage
 from src.stats_analysis import (
     analyze_three_phase,
@@ -50,7 +52,8 @@ def run_session(camera,
                 desk_depth_m: Optional[float] = None,
                 dotii_show: Optional[Callable[[str], None]] = None,
                 clock: Optional[Callable[[], float]] = None,
-                max_frames: Optional[int] = None) -> dict:
+                max_frames: Optional[int] = None,
+                alerter: Optional[Alerter] = None) -> dict:
     """主循环。
 
     Args:
@@ -63,13 +66,19 @@ def run_session(camera,
         dotii_show: callable(expression) 触发 Dotii；None 表示无提醒通道。
         clock: 返回当前秒数的 callable；默认 time.time。
         max_frames: 最多处理帧数（测试用）；None 表示不限。
+        alerter: PI 报警器（ADR-0007）；None 时使用 NoopAlerter 静默。
 
     Returns:
-        daily_report dict。
+        daily_report dict。相机重连耗尽时提前退出，返回空日报。
     """
     if clock is None:
         clock = time.time
+    if alerter is None:
+        alerter = NoopAlerter()
     absence_thr = thresholds["absence"]["no_skeleton_seconds"]
+    smooth_window = thresholds.get("smoothing", {}).get("window_seconds", 1.0)
+    dotii_alert_thr = thresholds.get(
+        "integrity", {}).get("dotii_failure_alert_threshold", 5)
 
     sid = storage.create_session(participant_id, phase)
     bad_since: Optional[float] = None
@@ -78,7 +87,9 @@ def run_session(camera,
     last_seen: Optional[float] = None
     no_skeleton_since: Optional[float] = None
     reminders = 0
+    dotii_failure_count = 0
     labels: list[PostureLabel] = []
+    entries: list[tuple[float, PostureLabel]] = []
     correction_times: list[float] = []
     t0 = clock()
 
@@ -86,13 +97,22 @@ def run_session(camera,
     while max_frames is None or frame_idx < max_frames:
         frame_idx += 1
         now = clock()
-        color, depth = camera.grab()
+        try:
+            color, depth = camera.grab()
+        except CameraReconnectError as e:
+            # ADR-0007：相机重连耗尽 → 异常落盘 + PI 报警 + 提前退出
+            storage.log_exception("camera_reconnect_exhausted", str(e),
+                                  session_id=sid)
+            alerter.alert("camera_reconnect_exhausted", str(e))
+            break
         if color is None:
             kps = [None] * 33
         else:
             try:
                 kps = pose.infer(color)
-            except MediaPipeTimeoutError:
+            except MediaPipeTimeoutError as e:
+                # ADR-0007：MediaPipe 超时独立落盘到 exceptions 表
+                storage.log_exception("mediapipe_timeout", str(e), session_id=sid)
                 kps = [None] * 33
 
         has_skeleton = bool(kps and kps[NOSE] is not None)
@@ -111,6 +131,7 @@ def run_session(camera,
 
         storage.insert_frame(sid, now, label)
         labels.append(label)
+        entries.append((now, label))
 
         # 提醒逻辑（followup 阶段 should_remind 内部关闭）
         if is_bad(label):
@@ -122,15 +143,29 @@ def run_session(camera,
                     dotii_show("fail")
                     last_reminder = now
                     reminders += 1
-                except DotiiAPIError:
-                    pass
+                    dotii_failure_count = 0  # 成功 → 重置连续失败计数
+                except DotiiAPIError as e:
+                    # ADR-0007：Dotii API 异常独立落盘 + 连续失败计数
+                    storage.log_exception("dotii_api_error", str(e), session_id=sid)
+                    dotii_failure_count += 1
+                    if dotii_failure_count >= dotii_alert_thr:
+                        alerter.alert(
+                            "dotii_failure_threshold",
+                            f"Dotii 连续失败 {dotii_failure_count} 次（阈值 {dotii_alert_thr}）")
         else:
             if bad_since is not None and last_label in BAD_POSTURES \
                     and dotii_show is not None:
                 try:
                     dotii_show("idle")
-                except DotiiAPIError:
-                    pass
+                    dotii_failure_count = 0  # 成功 → 重置
+                except DotiiAPIError as e:
+                    # ADR-0007：Dotii idle 提醒异常独立落盘
+                    storage.log_exception("dotii_api_error", str(e), session_id=sid)
+                    dotii_failure_count += 1
+                    if dotii_failure_count >= dotii_alert_thr:
+                        alerter.alert(
+                            "dotii_failure_threshold",
+                            f"Dotii 连续失败 {dotii_failure_count} 次（阈值 {dotii_alert_thr}）")
             # B2：本次 bad 周期内触发过提醒（last_reminder >= bad_since）
             # 且当前恢复 good → 记录从提醒到纠正的耗时
             if bad_since is not None and last_reminder is not None \
@@ -140,9 +175,15 @@ def run_session(camera,
         last_label = label
 
     storage.flush()
-    return daily_report(participant_id, labels, phase=phase, reminders=reminders,
+    # ADR-0005：单帧分类后用 1 秒窗移动众数平滑，避免单帧误判入统计。
+    # 提醒/离座判定用原始 label（已落盘）；统计口径用平滑后 labels。
+    smoothed_labels = smooth(entries, window_seconds=smooth_window)
+    return daily_report(participant_id, smoothed_labels, phase=phase,
+                        reminders=reminders,
                         correction_times=correction_times,
-                        session_start=t0, session_end=clock())
+                        session_start=t0, session_end=clock(),
+                        max_missing_ratio=thresholds.get(
+                            "integrity", {}).get("max_missing_ratio"))
 
 
 def run_study(sessions_config: list[dict],
@@ -181,14 +222,24 @@ def run_study(sessions_config: list[dict],
         return {"daily_reports": [], "analysis": None, "n_subjects": 0,
                 "exploratory": _exploratory_analysis([], [], [], screening_path)}
 
-    pids, phases = phase_columns(daily_reports)
+    # ADR-0006/0007：缺失比例 > 阈值的会话整体剔除，不进入 phase_columns
+    # 与 _exploratory_analysis。daily_reports 仍全部返回以保留可见性。
+    included = [r for r in daily_reports if not r.get("excluded", False)]
+    pids, phases = phase_columns(included)
     if not pids:
         # 有日报但被试未在 3 阶段全出现 → 无可分析列
         return {"daily_reports": daily_reports, "analysis": None, "n_subjects": 0,
-                "exploratory": _exploratory_analysis(daily_reports, [], [], screening_path)}
+                "exploratory": _exploratory_analysis(included, [], [], screening_path)}
+
+    if len(pids) < 3:
+        # Friedman 需 ≥3 被试：剔除后不足则跳过主分析，但仍返回被试数与探索性分析
+        return {"daily_reports": daily_reports, "analysis": None,
+                "n_subjects": len(pids),
+                "exploratory": _exploratory_analysis(included, pids,
+                                                     phases.baseline, screening_path)}
 
     analysis = analyze_three_phase(phases)
-    exploratory = _exploratory_analysis(daily_reports, pids,
+    exploratory = _exploratory_analysis(included, pids,
                                         phases.baseline, screening_path)
     return {"daily_reports": daily_reports, "analysis": analysis,
             "n_subjects": len(pids), "exploratory": exploratory}
