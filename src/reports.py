@@ -10,7 +10,7 @@ from typing import Sequence
 
 from src.phases import PHASE_ORDER, Phase, ThreePhase
 from src.posture_classify import BAD_POSTURES, PostureLabel
-from src.statistics import compute_ratio
+from src.statistics import compute_missing_ratio, compute_ratio
 
 
 def daily_report(participant_id: str,
@@ -19,12 +19,22 @@ def daily_report(participant_id: str,
                  reminders: int = 0,
                  correction_times: Sequence[float] | None = None,
                  session_start: float | None = None,
-                 session_end: float | None = None) -> dict:
-    """生成个人日报。"""
+                 session_end: float | None = None,
+                 max_missing_ratio: float | None = None) -> dict:
+    """生成个人日报。
+
+    Args:
+        max_missing_ratio: 缺失比例上限（ADR-0007）。缺失比例严格大于该值时
+            excluded=True，会话整体剔除不进入 phase_columns。None 表示
+            不做剔除判断（excluded 恒为 False）。严格大于保证 == 阈值不剔除。
+    """
     counts = Counter(l.value for l in labels)
     valid = [l for l in labels
              if l not in (PostureLabel.ABSENCE, PostureLabel.MISSING)]
     bad = sum(1 for l in valid if l in BAD_POSTURES)
+    missing_ratio = compute_missing_ratio(labels)
+    excluded = (max_missing_ratio is not None
+                and missing_ratio > max_missing_ratio)
     return {
         "participant_id": participant_id,
         "phase": phase,
@@ -37,6 +47,8 @@ def daily_report(participant_id: str,
         "posture_counts": dict(counts),
         "reminders": reminders,
         "correction_times": list(correction_times) if correction_times else [],
+        "missing_ratio": missing_ratio,
+        "excluded": excluded,
     }
 
 

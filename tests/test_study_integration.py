@@ -191,7 +191,8 @@ def test_run_study_returns_empty_when_no_sessions(tmp_path):
     assert result["analysis"] is None  # 无数据时不调用 stats
 
 
-def _fake_report(pid, phase, bad_ratio, correction_times=None):
+def _fake_report(pid, phase, bad_ratio, correction_times=None,
+                 excluded=False, missing_ratio=0.0):
     """构造完整 daily_report dict 用于 run_study 探索性分析测试。"""
     return {
         "participant_id": pid,
@@ -205,7 +206,37 @@ def _fake_report(pid, phase, bad_ratio, correction_times=None):
         "posture_counts": {},
         "reminders": 0,
         "correction_times": list(correction_times) if correction_times else [],
+        "missing_ratio": missing_ratio,
+        "excluded": excluded,
     }
+
+
+def test_run_study_filters_excluded_reports():
+    """ADR-0006/0007：缺失比例 > 20% 的会话整体剔除，不进入 phase_columns。
+
+    p02 baseline 标记 excluded=True → phase_columns 仅剩 p01 与 p03 → n_subjects=2。
+    """
+    from src.pipeline import run_study
+
+    pids = ["p01", "p02", "p03"]
+    reports = []
+    for pid in pids:
+        is_p02_baseline = (pid == "p02")
+        reports.append(_fake_report(pid, "baseline", 0.50,
+                                     excluded=is_p02_baseline,
+                                     missing_ratio=(0.30 if is_p02_baseline else 0.0)))
+        reports.append(_fake_report(pid, "intervention", 0.20))
+        reports.append(_fake_report(pid, "followup", 0.25))
+
+    result = run_study(
+        sessions_config=reports,
+        session_runner=lambda s: s,
+    )
+
+    # daily_reports 仍包含全部 9 条（保留可见性）
+    assert len(result["daily_reports"]) == 9
+    # 但 n_subjects 应剔除 p02 → 2
+    assert result["n_subjects"] == 2
 
 
 def test_run_study_with_screening_returns_exploratory_spearman(tmp_path):

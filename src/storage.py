@@ -41,7 +41,29 @@ class Storage:
             );
             CREATE INDEX IF NOT EXISTS idx_frames_session
                 ON frames(session_id);
+            CREATE TABLE IF NOT EXISTS exceptions (
+                id INTEGER PRIMARY KEY,
+                session_id INTEGER,
+                timestamp REAL NOT NULL,
+                kind TEXT NOT NULL,
+                message TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id)
+            );
             """
+        )
+        self.conn.commit()
+
+    def log_exception(self, kind: str, message: str,
+                      session_id: Optional[int] = None) -> None:
+        """记录异常到 exceptions 表（ADR-0007 异常独立存储）。
+
+        与 frames 表同库不同表；不走 buffer，直接 commit 保证异常即时落盘
+        （即使主循环未 flush 也能保留异常证据）。timestamp 用当前 epoch 秒。
+        """
+        self.conn.execute(
+            "INSERT INTO exceptions(session_id, timestamp, kind, message) "
+            "VALUES(?,?,?,?)",
+            (session_id, time.time(), kind, message),
         )
         self.conn.commit()
 

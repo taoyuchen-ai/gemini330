@@ -49,3 +49,34 @@ def test_class_report_empty():
     cls = class_report([])
     assert cls["n_participants"] == 0
     assert cls["class_bad_ratio"] == 0.0
+
+
+# ---------- missing_ratio / excluded（ADR-0006/0007）----------
+
+def test_daily_report_includes_missing_ratio():
+    """daily_report 输出含 missing_ratio 字段。"""
+    labels = [P.DESK_LYING, P.SIT_UPRIGHT, P.MISSING, P.ABSENCE]
+    rep = daily_report("p01", labels)
+    assert rep["missing_ratio"] == pytest.approx(0.5)
+
+
+def test_daily_report_excluded_when_exceeds_threshold():
+    """max_missing_ratio=0.20 + missing_ratio=0.5 → excluded=True（严格大于）。"""
+    labels = [P.MISSING, P.ABSENCE, P.SIT_UPRIGHT, P.SIT_UPRIGHT]  # 2/4 = 0.5
+    rep = daily_report("p01", labels, max_missing_ratio=0.20)
+    assert rep["excluded"] is True
+
+
+def test_daily_report_not_excluded_at_exact_threshold():
+    """max_missing_ratio=0.20 + missing_ratio=0.20 → excluded=False（严格 >，不剔除）。"""
+    # 5 帧，1 MISSING → 0.20
+    labels = [P.MISSING, P.SIT_UPRIGHT, P.SIT_UPRIGHT, P.SIT_UPRIGHT, P.SIT_UPRIGHT]
+    rep = daily_report("p01", labels, max_missing_ratio=0.20)
+    assert rep["excluded"] is False
+
+
+def test_daily_report_default_excluded_false_without_threshold():
+    """未传 max_missing_ratio → excluded=False。"""
+    labels = [P.MISSING, P.MISSING]  # missing_ratio=1.0
+    rep = daily_report("p01", labels)
+    assert rep["excluded"] is False
